@@ -1,0 +1,5 @@
+.env.local
+.env*.local
+service-account-key.json
+node_modules/
+.next/
