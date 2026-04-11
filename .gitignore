@@ -3,3 +3,5 @@
 service-account-key.json
 node_modules/
 .next/
+node.json
+tsconfig.tsbuildinfo
