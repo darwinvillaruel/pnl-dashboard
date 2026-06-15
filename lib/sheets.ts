@@ -330,9 +330,8 @@ export async function fetchSheetData(
   }
   console.log(`[sheets] headerRowIdx=${headerRowIdx}, dayColMap first keys:`, dayColMap.slice(0, 3).map(d => d.dayKey));
 
-  // AU has an ID column (col A = ID, col B = label, col C+ = days).
-  // UK/US/NZ/CA removed the ID column (col A = label, col B+ = days).
-  const labelColIdx = region === "Australia" ? 1 : 0;
+  // All regions: col A (index 0) is the label column (vertical name, ROI, Margin, Leads).
+  const labelColIdx = 0;
   console.log(`[sheets] labelColIdx=${labelColIdx}`);
   // Log first few data rows so we can see exact cell values
   for (let r = headerRowIdx + 1; r < Math.min(headerRowIdx + 6, rows.length); r++) {
