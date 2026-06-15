@@ -13,7 +13,7 @@ export default function Header({ onRefresh, onExport, loading }: HeaderProps) {
     <header className="sticky top-0 z-50 border-b border-slate-800/60 bg-surface-950/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-screen-2xl items-center justify-between px-6">
         {/* Logo */}
-        <div className="flex items-center">
+        <div className="flex items-center gap-6">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 104.57 21.97" className="h-8 w-auto" aria-label="ULeads">
             <g>
               <g fill="white">
@@ -31,25 +31,30 @@ export default function Header({ onRefresh, onExport, loading }: HeaderProps) {
               </g>
             </g>
           </svg>
+
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={onRefresh}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-700/50 bg-surface-800/60 px-3 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:border-slate-600 hover:text-white disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">{loading ? "Refreshing…" : "Refresh"}</span>
-          </button>
-          <button
-            onClick={onExport}
-            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-lg shadow-blue-900/30 transition-all hover:bg-blue-500 active:scale-95"
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Export CSV</span>
-          </button>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              disabled={loading}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-700/50 bg-surface-800/60 px-3 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:border-slate-600 hover:text-white disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">{loading ? "Refreshing…" : "Refresh"}</span>
+            </button>
+          )}
+          {onExport && (
+            <button
+              onClick={onExport}
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-lg shadow-blue-900/30 transition-all hover:bg-blue-500 active:scale-95"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Export CSV</span>
+            </button>
+          )}
         </div>
       </div>
     </header>

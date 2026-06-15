@@ -58,7 +58,6 @@ export default function Home() {
   const [verticals, setVerticals] = useState<VerticalData[]>(RAW_VERTICALS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const fetchData = useCallback(async (r: Region, m: number) => {
     setLoading(true);
     setError(null);
@@ -394,6 +393,7 @@ export default function Home() {
           </p>
         </div>
       </main>
+
     </div>
   );
 }

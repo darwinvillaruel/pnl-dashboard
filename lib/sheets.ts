@@ -2,14 +2,14 @@ import { google } from "googleapis";
 import { type Region, MONTHS, type VerticalData, type DailyMetrics } from "./data";
 
 // Maps PNL vertical name → LB Tracker campaign name (AU only; LB Tracker is AU-specific)
-const VERTICAL_TO_LB_CAMPAIGN: Record<string, string> = {
+export const VERTICAL_TO_LB_CAMPAIGN: Record<string, string> = {
   "Aus Auto Finder (PRIME)": "Aus Auto - Prime",
   "Aus Auto Finder (SUB-PRIME)": "Aus Auto - Sub-Prime",
   "Aus Business Lending": "Aus Business Lending",
   "Right Health Insurance": "Au Health Insurance",
   "Right Life Insure": "Au Right Life Insure",
-  "Right life insure Golden insurance": "Golden Insurance",
-  "Right life insure Direct Cover": "Direct Cover",
+  "Right Life Insure Golden Insurance": "Golden Insurance",
+  "Right Life Insure Direct Cover": "Direct Cover",
   "Shuffling Debt": "AU Debt - Shuffling Debt",
   "Boost Ur Super": "Au Superannuation",
   "Claims Buddy (TPD)": "AU TPD Claims",
@@ -145,6 +145,124 @@ async function fetchLBTrackerData(
 }
 
 
+// Reversed map: LB Tracker campaign name → PNL vertical name
+const LB_CAMPAIGN_TO_VERTICAL: Record<string, string> = Object.fromEntries(
+  Object.entries(VERTICAL_TO_LB_CAMPAIGN).map(([vertical, campaign]) => [campaign, vertical])
+);
+
+export interface LBCapTotal {
+  vertical: string;
+  campaign: string;
+  totalCap: number;
+  actualDelivered: number;
+  deliveryRate: number | null;
+}
+
+// Shared: fetches and parses all LB Tracker rows from the AU sheet for the given month.
+// Returns a map of campaignName → { totalCap, actualDelivered }.
+async function fetchLBTrackerRaw(month: number): Promise<Map<string, { totalCap: number; actualDelivered: number }>> {
+  const spreadsheetId = process.env.SHEET_ID_AU;
+  if (!spreadsheetId) throw new Error("SHEET_ID_AU is not configured");
+
+  const auth = getAuthClient();
+  const sheets = google.sheets({ version: "v4", auth });
+
+  let rows: string[][];
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "LB Tracker!A1:I5000",
+      valueRenderOption: "FORMATTED_VALUE",
+    });
+    rows = (res.data.values ?? []) as string[][];
+  } catch {
+    return new Map();
+  }
+
+  if (rows.length < 2) return new Map();
+
+  let colDate = -1, colCampaign = -1, colCurrent = -1, colDailyCap = -1, colDay = -1;
+  let headerRow = -1;
+
+  for (let r = 0; r < Math.min(5, rows.length); r++) {
+    const lower = (rows[r] ?? []).map((c) => (c ?? "").trim().toLowerCase());
+    const di = lower.indexOf("date");
+    const ci = lower.indexOf("campaign");
+    const curi = lower.indexOf("current");
+    const capi = lower.findIndex((c) => c === "total daily cap" || c.includes("daily cap"));
+    const dayi = lower.indexOf("day");
+    if (di >= 0 && ci >= 0 && capi >= 0) {
+      headerRow = r;
+      colDate = di;
+      colCampaign = ci;
+      colCurrent = curi;
+      colDailyCap = capi;
+      colDay = dayi;
+      break;
+    }
+  }
+
+  if (headerRow < 0) return new Map();
+
+  const monthAbbr = MONTHS[month].slice(0, 3).toLowerCase();
+  const totals = new Map<string, { totalCap: number; actualDelivered: number }>();
+
+  for (let r = headerRow + 1; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row || row.length === 0) continue;
+
+    const dateVal = (row[colDate] ?? "").trim();
+    if (!dateVal.toLowerCase().includes(`- ${monthAbbr}`)) continue;
+
+    const campaign = (row[colCampaign] ?? "").trim();
+    if (!campaign) continue;
+
+    const dayLabel = colDay >= 0 ? (row[colDay] ?? "").trim() : "";
+    const isWeekend = dayLabel === "Sat" || dayLabel === "Sun";
+
+    const current = colCurrent >= 0 ? parseNum(row[colCurrent] ?? "") : 0;
+    const dailyCap = isWeekend ? 0 : parseNum(row[colDailyCap] ?? "");
+
+    if (!totals.has(campaign)) totals.set(campaign, { totalCap: 0, actualDelivered: 0 });
+    const entry = totals.get(campaign)!;
+    entry.totalCap += dailyCap;
+    entry.actualDelivered += current;
+  }
+
+  return totals;
+}
+
+// AU: returns only the campaigns mapped via VERTICAL_TO_LB_CAMPAIGN.
+// totalCap sums weekday-only Daily Cap; actualDelivered sums Current for all days.
+export async function fetchLBTrackerCapTotals(month: number): Promise<LBCapTotal[]> {
+  const raw = await fetchLBTrackerRaw(month);
+  return Array.from(raw.entries())
+    .map(([campaign, { totalCap, actualDelivered }]) => ({
+      vertical: LB_CAMPAIGN_TO_VERTICAL[campaign] ?? campaign,
+      campaign,
+      totalCap,
+      actualDelivered,
+      deliveryRate: totalCap > 0 ? actualDelivered / totalCap : null,
+    }))
+    .filter((r) => r.campaign in LB_CAMPAIGN_TO_VERTICAL)
+    .sort((a, b) => a.vertical.localeCompare(b.vertical));
+}
+
+// All regions: returns every campaign in the AU LB Tracker without filtering.
+// Callers are responsible for matching campaigns to their region's verticals.
+export async function fetchLBTrackerAllCampaigns(month: number): Promise<LBCapTotal[]> {
+  const raw = await fetchLBTrackerRaw(month);
+  return Array.from(raw.entries())
+    .map(([campaign, { totalCap, actualDelivered }]) => ({
+      vertical: LB_CAMPAIGN_TO_VERTICAL[campaign] ?? campaign,
+      campaign,
+      totalCap,
+      actualDelivered,
+      deliveryRate: totalCap > 0 ? actualDelivered / totalCap : null,
+    }))
+    .sort((a, b) => a.campaign.localeCompare(b.campaign));
+}
+
 export async function fetchSheetData(
   region: Region,
   month: number
@@ -164,16 +282,24 @@ export async function fetchSheetData(
       valueRenderOption: "FORMATTED_VALUE",
     });
     rows = (res.data.values ?? []) as string[][];
+    console.log(`[sheets] ${region}/${tabName}: fetched ${rows.length} rows`);
+    if (rows.length > 0) console.log(`[sheets] first row sample:`, JSON.stringify(rows[0]).slice(0, 200));
+    if (rows.length > 1) console.log(`[sheets] second row sample:`, JSON.stringify(rows[1]).slice(0, 200));
+    if (rows.length > 2) console.log(`[sheets] third row sample:`, JSON.stringify(rows[2]).slice(0, 200));
   } catch (err: any) {
     const status = err?.response?.status ?? err?.status ?? err?.code;
     const message: string = err?.response?.data?.error?.message ?? err?.message ?? "";
+    console.error(`[sheets] fetch error for ${region}/${tabName}: status=${status} message=${message}`);
     if (status === 400 || status === 404 || message.includes("Unable to parse range") || message.includes("notFound")) {
       return { verticals: [] };
     }
     throw err;
   }
 
-  if (rows.length < 3) return { verticals: [] };
+  if (rows.length < 3) {
+    console.error(`[sheets] Too few rows (${rows.length}) for ${region}/${tabName}`);
+    return { verticals: [] };
+  }
 
   // --- Detect header row (contains "1- Jan" / "1- Feb" etc.) ---
   // It may not always be row 0; scan first 5 rows
@@ -190,7 +316,8 @@ export async function fetchSheetData(
         found.push({ colIdx: c, dayKey: `${parseInt(match[1], 10)}- ${match[2]}`, dayNum: parseInt(match[1], 10) });
       }
     }
-    if (found.length >= 20) { // must find at least 20 day columns to confirm
+    console.log(`[sheets] row ${r}: found ${found.length} day-cols. cells: ${JSON.stringify(row.slice(0, 5))}`);
+    if (found.length >= 5) { // must find at least 5 day columns to confirm
       headerRowIdx = r;
       dayColMap.push(...found);
       break;
@@ -201,19 +328,15 @@ export async function fetchSheetData(
     console.error(`[sheets] No day columns detected in ${region}/${tabName}`);
     return { verticals: [] };
   }
+  console.log(`[sheets] headerRowIdx=${headerRowIdx}, dayColMap first keys:`, dayColMap.slice(0, 3).map(d => d.dayKey));
 
-  // Determine which column index holds the label (B = index 1 typically)
-  // Detect by finding a row that has "ROI" or "Margin" and checking which col it's in
-  let labelColIdx = 1; // default: column B
-  for (let r = headerRowIdx + 1; r < Math.min(headerRowIdx + 20, rows.length); r++) {
-    for (let c = 0; c < 3; c++) {
-      const t = (rows[r][c] ?? "").trim().toLowerCase();
-      if (t === "roi" || t === "margin" || t.startsWith("leads")) {
-        labelColIdx = c;
-        break;
-      }
-    }
-    if (labelColIdx !== 1) break;
+  // AU has an ID column (col A = ID, col B = label, col C+ = days).
+  // UK/US/NZ/CA removed the ID column (col A = label, col B+ = days).
+  const labelColIdx = region === "Australia" ? 1 : 0;
+  console.log(`[sheets] labelColIdx=${labelColIdx}`);
+  // Log first few data rows so we can see exact cell values
+  for (let r = headerRowIdx + 1; r < Math.min(headerRowIdx + 6, rows.length); r++) {
+    console.log(`[sheets] data row ${r} cols 0-3:`, JSON.stringify((rows[r] ?? []).slice(0, 4)));
   }
 
   const verticals: VerticalData[] = [];
@@ -225,13 +348,10 @@ export async function fetchSheetData(
 
   while (i < rows.length) {
     const row = rows[i] ?? [];
-    const idCell = (row[0] ?? "").trim();
     const labelCell = (row[labelColIdx] ?? "").trim();
 
     // Detect vertical header: label col contains "Facebook -" or "Tiktok -"
-    // and none of the data columns have numeric values (or ID col is empty)
     const isVerticalHeader =
-      !idCell &&
       (labelCell.toLowerCase().startsWith("facebook -") ||
         labelCell.toLowerCase().startsWith("tiktok -") ||
         labelCell.toLowerCase().startsWith("fb -") ||
@@ -253,8 +373,8 @@ export async function fetchSheetData(
         const jIdCell = (rows[j][0] ?? "").trim();
         const jLbl = (rows[j][labelColIdx] ?? "").trim().toLowerCase();
 
-        // Stop if we hit another vertical header (empty id + starts with platform name)
-        if (!jIdCell && (jLbl.startsWith("facebook -") || jLbl.startsWith("tiktok -") || jLbl.startsWith("fb -") || jLbl.startsWith("tt -"))) {
+        // Stop if we hit another vertical header
+        if (jLbl.startsWith("facebook -") || jLbl.startsWith("tiktok -") || jLbl.startsWith("fb -") || jLbl.startsWith("tt -")) {
           break;
         }
 
@@ -321,5 +441,6 @@ export async function fetchSheetData(
     }
   }
 
+  console.log(`[sheets] ${region}/${tabName}: parsed ${verticals.length} verticals. leads totals:`, verticals.map(v => `${v.name}:${v.totalLeads}`).join(', ').slice(0, 300));
   return { verticals };
 }
